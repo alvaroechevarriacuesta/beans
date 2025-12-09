@@ -22,7 +22,7 @@ where
 
 pub async fn binance_ws() -> Result<()> {
     let host = "fstream.binance.com";
-    let path = "/ws/btcusdt@depth";
+    let path = "/ws/btcusdt@trade";
     let port = 443;
 
     let tcp_stream = TcpStream::connect((host, port)).await?;
