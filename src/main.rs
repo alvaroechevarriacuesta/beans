@@ -1,4 +1,6 @@
+mod binance_ws;
 use anyhow::Result;
+use binance_ws::binance_ws;
 use crossbeam::channel::{unbounded, Receiver};
 use fastwebsockets::{handshake, FragmentCollector, Frame, OpCode};
 use hyper::header::{CONNECTION, HOST, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION, UPGRADE};
@@ -38,6 +40,8 @@ fn is_last_trade_price(raw: &[u8]) -> bool {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    binance_ws().await?;
+
     let host = "ws-subscriptions-clob.polymarket.com";
     let path = "/ws/market";
     let port = 443;
