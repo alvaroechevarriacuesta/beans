@@ -1,13 +1,15 @@
 use anyhow::Result;
+use crossbeam::channel::{unbounded, Receiver};
 use fastwebsockets::{handshake, FragmentCollector, Frame, OpCode};
 use hyper::header::{CONNECTION, HOST, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION, UPGRADE};
 use hyper::Request;
 use hyper_util::rt::TokioIo;
+use rayon::ThreadPoolBuilder;
 use rustls_pki_types::ServerName;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
-use crossbeam::channel::{unbounded, Receiver, Sender};
 
 const LAST_TRADE_PRICE: &[u8] = b"last_trade_price";
 
@@ -77,7 +79,7 @@ async fn main() -> Result<()> {
     // Subscribe to market updates
     let subscribe_message = r#"{
         "type": "market",
-        "assets_ids": ["55629675658531796836270928055107359815299274196063137467797078435252406021824"]
+        "assets_ids": ["24153433839606000569035568503373676252261690218886574912198779238237711758279"]
     }"#;
 
     ws.write_frame(Frame::text(fastwebsockets::Payload::Borrowed(
@@ -86,7 +88,11 @@ async fn main() -> Result<()> {
     .await?;
 
     println!("🔌 Connected! Listening for last_trade_price events...\n");
+    let (tx, rx) = unbounded::<ParsedMessage>();
+    std::thread::spawn(move || orderbook_handling(rx));
 
+    let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+    let mut seq_no: u64 = 0;
     loop {
         let frame = ws.read_frame().await?;
 
@@ -98,11 +104,22 @@ async fn main() -> Result<()> {
             OpCode::Text => {
                 let raw = &frame.payload[..];
                 if is_last_trade_price(raw) {
-                    let text = String::from_utf8_lossy(raw);
-                    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    println!("💰 LAST TRADE PRICE:");
-                    println!("{}", text);
-                    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    let seq = seq_no;
+                    seq_no += 1;
+
+                    // Clone sender (cheap - just Arc clone)
+                    let tx = tx.clone();
+                    // Copy the bytes we need (unavoidable - frame gets reused)
+                    let owned_data = raw.to_vec();
+
+                    pool.spawn(move || {
+                        if let Some(parsed) = parse_message(&owned_data) {
+                            let _ = tx.send(ParsedMessage {
+                                seq_no: seq,
+                                data: parsed,
+                            });
+                        }
+                    });
                 }
             }
             _ => {}
@@ -110,4 +127,22 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_message(raw: &[u8]) -> Option<String> {
+    Some(String::from_utf8_lossy(raw).to_string())
+}
+
+fn orderbook_handling(rx: Receiver<ParsedMessage>) {
+    let mut buffer = BTreeMap::new();
+    let mut next_seq: u64 = 0;
+
+    while let Ok(msg) = rx.recv() {
+        buffer.insert(msg.seq_no, msg.data);
+
+        while let Some(parsed) = buffer.remove(&next_seq) {
+            println!("{}", parsed);
+            next_seq += 1;
+        }
+    }
 }
