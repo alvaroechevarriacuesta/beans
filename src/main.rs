@@ -4,10 +4,17 @@ use hyper::header::{CONNECTION, HOST, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION, 
 use hyper::Request;
 use hyper_util::rt::TokioIo;
 use rustls_pki_types::ServerName;
-use serde_json::Value;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
+use crossbeam::channel::{unbounded, Receiver, Sender};
+
+const LAST_TRADE_PRICE: &[u8] = b"last_trade_price";
+
+struct ParsedMessage {
+    seq_no: u64,
+    data: String,
+}
 
 struct SpawnExecutor;
 
@@ -21,33 +28,10 @@ where
     }
 }
 
-/// Process and display last_trade_price events
-fn process_event(json_str: &str) {
-    let Ok(value) = serde_json::from_str::<Value>(json_str) else {
-        return;
-    };
-
-    // Check if this is a last_trade_price event
-    if value.get("event_type").and_then(|v| v.as_str()) == Some("last_trade_price") {
-        let price = value.get("price").and_then(|v| v.as_str()).unwrap_or("?");
-        let size = value.get("size").and_then(|v| v.as_str()).unwrap_or("?");
-        let asset_id = value
-            .get("asset_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("?");
-        let timestamp = value
-            .get("timestamp")
-            .and_then(|v| v.as_str())
-            .unwrap_or("?");
-
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!("💰 LAST TRADE PRICE");
-        println!("   Price:     {}", price);
-        println!("   Size:      {}", size);
-        println!("   Asset ID:  {}...", &asset_id[..20.min(asset_id.len())]);
-        println!("   Timestamp: {}", timestamp);
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    }
+/// Check if raw bytes contain the pattern we care about
+fn is_last_trade_price(raw: &[u8]) -> bool {
+    raw.windows(LAST_TRADE_PRICE.len())
+        .any(|w| w == LAST_TRADE_PRICE)
 }
 
 #[tokio::main]
@@ -93,7 +77,7 @@ async fn main() -> Result<()> {
     // Subscribe to market updates
     let subscribe_message = r#"{
         "type": "market",
-        "assets_ids": ["71358653749567369751762906175193924319733398285624296258738807024936977343791"]
+        "assets_ids": ["55629675658531796836270928055107359815299274196063137467797078435252406021824"]
     }"#;
 
     ws.write_frame(Frame::text(fastwebsockets::Payload::Borrowed(
@@ -112,8 +96,14 @@ async fn main() -> Result<()> {
                 break;
             }
             OpCode::Text => {
-                let txt = String::from_utf8_lossy(&frame.payload);
-                process_event(&txt);
+                let raw = &frame.payload[..];
+                if is_last_trade_price(raw) {
+                    let text = String::from_utf8_lossy(raw);
+                    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    println!("💰 LAST TRADE PRICE:");
+                    println!("{}", text);
+                    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                }
             }
             _ => {}
         }
