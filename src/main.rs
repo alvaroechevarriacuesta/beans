@@ -1,6 +1,4 @@
-mod binance_ws;
 use anyhow::Result;
-use binance_ws::binance_ws;
 use crossbeam::channel::{unbounded, Receiver};
 use fastwebsockets::{handshake, FragmentCollector, Frame, OpCode};
 use hyper::header::{CONNECTION, HOST, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION, UPGRADE};
@@ -13,11 +11,17 @@ use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
+mod binance_ws;
+mod orderbook;
+
+use orderbook::Orderbook;
+
 const LAST_TRADE_PRICE: &[u8] = b"last_trade_price";
+const ORDERBOOK: &[u8] = b"book";
 
 struct ParsedMessage {
     seq_no: u64,
-    data: String,
+    orderbook: Orderbook,
 }
 
 struct SpawnExecutor;
@@ -38,9 +42,24 @@ fn is_last_trade_price(raw: &[u8]) -> bool {
         .any(|w| w == LAST_TRADE_PRICE)
 }
 
+/// Check if this is the initial orderbook snapshot (starts with '[' and contains "book")
+fn is_initial_book(raw: &[u8]) -> bool {
+    raw.first() == Some(&b'[') && raw.windows(ORDERBOOK.len()).any(|w| w == ORDERBOOK)
+}
+
+/// Strip array wrapper: [{...}] -> {...}
+/// We already know it starts with '[' from is_initial_book
+fn strip_array_wrapper(raw: &[u8]) -> &[u8] {
+    // Skip leading '['
+    let start = 1;
+    // Find last ']' (might have trailing whitespace/newline)
+    let end = raw.iter().rposition(|&b| b == b']').unwrap_or(raw.len());
+    &raw[start..end]
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    binance_ws().await?;
+    // binance_ws().await?;
 
     let host = "ws-subscriptions-clob.polymarket.com";
     let path = "/ws/market";
@@ -83,7 +102,7 @@ async fn main() -> Result<()> {
     // Subscribe to market updates
     let subscribe_message = r#"{
         "type": "market",
-        "assets_ids": ["24153433839606000569035568503373676252261690218886574912198779238237711758279"]
+        "assets_ids": ["115788731075794337121956742643032236521497269339764102625753674719958328415839"]
     }"#;
 
     ws.write_frame(Frame::text(fastwebsockets::Payload::Borrowed(
@@ -107,20 +126,20 @@ async fn main() -> Result<()> {
             }
             OpCode::Text => {
                 let raw = &frame.payload[..];
-                if is_last_trade_price(raw) {
+                if is_initial_book(raw) {
                     let seq = seq_no;
                     seq_no += 1;
 
                     // Clone sender (cheap - just Arc clone)
                     let tx = tx.clone();
-                    // Copy the bytes we need (unavoidable - frame gets reused)
-                    let owned_data = raw.to_vec();
+                    // Strip array wrapper and copy bytes
+                    let owned_data = strip_array_wrapper(raw).to_vec();
 
                     pool.spawn(move || {
-                        if let Some(parsed) = parse_message(&owned_data) {
+                        if let Some(ob) = parse_message(&owned_data) {
                             let _ = tx.send(ParsedMessage {
                                 seq_no: seq,
-                                data: parsed,
+                                orderbook: ob,
                             });
                         }
                     });
@@ -133,8 +152,16 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn parse_message(raw: &[u8]) -> Option<String> {
-    Some(String::from_utf8_lossy(raw).to_string())
+fn parse_message(raw: &[u8]) -> Option<Orderbook> {
+    match Orderbook::from_bytes(raw) {
+        Ok(ob) => Some(ob),
+        Err(e) => {
+            // Print first 500 chars of raw message to debug
+            let preview = String::from_utf8_lossy(&raw[..raw.len().min(500)]);
+            eprintln!("Parse error: {}\nRaw: {}", e, preview);
+            None
+        }
+    }
 }
 
 fn orderbook_handling(rx: Receiver<ParsedMessage>) {
@@ -142,10 +169,23 @@ fn orderbook_handling(rx: Receiver<ParsedMessage>) {
     let mut next_seq: u64 = 0;
 
     while let Ok(msg) = rx.recv() {
-        buffer.insert(msg.seq_no, msg.data);
+        buffer.insert(msg.seq_no, msg.orderbook);
 
-        while let Some(parsed) = buffer.remove(&next_seq) {
-            println!("{}", parsed);
+        while let Some(ob) = buffer.remove(&next_seq) {
+            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            println!("📊 Orderbook Update #{}", next_seq);
+            println!("   Market: {}", ob.market);
+            println!("   Asset:  {}", &ob.asset_id[..20]);
+            println!("   Time:   {}", ob.timestamp);
+            if let Some((bid, bid_sz)) = ob.best_bid() {
+                println!("   Best Bid: {} (size: {})", bid, bid_sz);
+            }
+            if let Some((ask, ask_sz)) = ob.best_ask() {
+                println!("   Best Ask: {} (size: {})", ask, ask_sz);
+            }
+            if let Some(spread) = ob.spread() {
+                println!("   Spread:   {}", spread);
+            }
             next_seq += 1;
         }
     }
