@@ -54,7 +54,7 @@ pub async fn connect(orderbook: Arc<RwLock<Orderbook>>) -> Result<()> {
 
     let subscribe_message = r#"{
         "type": "market",
-        "assets_ids": ["52286616472996634577443051031708917634646051347292466975337196584207785187680"]
+        "assets_ids": ["111044595014582088938260192157643537995209718659498347963726885794349502598398"]
     }"#;
 
     ws.write_frame(Frame::text(fastwebsockets::Payload::Borrowed(
@@ -77,14 +77,13 @@ pub async fn connect(orderbook: Arc<RwLock<Orderbook>>) -> Result<()> {
             }
             OpCode::Text => {
                 let raw = &frame.payload[..];
-                if is_book_message(raw) {
-                    continue;
-                } else {
-                    let seq = seq_no;
-                    seq_no += 1;
-                    let tx = tx.clone();
+                let seq = seq_no;
+                seq_no += 1;
+                let tx = tx.clone();
+                // Initial book message
+                if seq == 0 {
+                    // Comes wrapped in []
                     let owned_data = strip_array_wrapper(raw).to_vec();
-
                     pool.spawn(move || {
                         if let Some(ob) = parse_message(&owned_data) {
                             let _ = tx.send(ParsedMessage {
@@ -93,6 +92,17 @@ pub async fn connect(orderbook: Arc<RwLock<Orderbook>>) -> Result<()> {
                             });
                         }
                     });
+                } else {
+                let owned_data = strip_array_wrapper(raw).to_vec();
+
+                pool.spawn(move || {
+                    if let Some(ob) = parse_message(&owned_data) {
+                        let _ = tx.send(ParsedMessage {
+                            seq_no: seq,
+                            orderbook: ob,
+                        });
+                    }
+                });
                 }
             }
             _ => {}
@@ -102,9 +112,8 @@ pub async fn connect(orderbook: Arc<RwLock<Orderbook>>) -> Result<()> {
     Ok(())
 }
 
-// WE want to avoid orderbook messages (unless it's the initial book)
-fn is_book_message(raw: &[u8]) -> bool {
-    raw.first() != Some(&b'[') && raw.windows(ORDERBOOK.len()).any(|w| w == ORDERBOOK)
+fn is_orderbook(raw: &[u8]) -> bool {
+    raw.windows(ORDERBOOK.len()).any(|w| w == ORDERBOOK)
 }
 fn strip_array_wrapper(raw: &[u8]) -> &[u8] {
     // Skip leading '['
@@ -115,6 +124,8 @@ fn strip_array_wrapper(raw: &[u8]) -> &[u8] {
 }
 
 fn parse_message(raw: &[u8]) -> Option<Orderbook> {
+    let message = String::from_utf8_lossy(raw);
+    println!("{}", message);
     match Orderbook::from_bytes(raw) {
         Ok(ob) => Some(ob),
         Err(e) => {
