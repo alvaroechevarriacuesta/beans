@@ -77,45 +77,14 @@ pub async fn connect(orderbook: Arc<RwLock<Orderbook>>) -> Result<()> {
             }
             OpCode::Text => {
                 let raw = &frame.payload[..];
-                if is_initial_book(raw) {
-                    let seq = seq_no;
-                    seq_no += 1;
-
-                    // Clone sender (cheap - just Arc clone)
-                    let tx = tx.clone();
-                    // Strip array wrapper and copy bytes
-                    let owned_data = strip_array_wrapper(raw).to_vec();
-
-                    pool.spawn(move || {
-                        if let Some(ob) = parse_message(&owned_data) {
-                            let _ = tx.send(ParsedMessage {
-                                seq_no: seq,
-                                orderbook: ob,
-                            });
-                        }
-                    });
-                } else if is_price_change(raw) {
-                    let seq = seq_no;
-                    seq_no += 1;
-
-                    // Clone sender (cheap - just Arc clone)
-                    let tx = tx.clone();
-                    // Strip array wrapper and copy bytes
-                    let owned_data = strip_array_wrapper(raw).to_vec();
-
-                    pool.spawn(move || {
-                        if let Some(ob) = parse_message(&owned_data) {
-                            let _ = tx.send(ParsedMessage {
-                                seq_no: seq,
-                                orderbook: ob,
-                            });
-                        }
-                    });
-                } else if is_last_trade_price(raw) {
+                if is_book_message(raw) {
+                    continue;
+                } else {
                     let seq = seq_no;
                     seq_no += 1;
                     let tx = tx.clone();
                     let owned_data = strip_array_wrapper(raw).to_vec();
+
                     pool.spawn(move || {
                         if let Some(ob) = parse_message(&owned_data) {
                             let _ = tx.send(ParsedMessage {
@@ -133,17 +102,9 @@ pub async fn connect(orderbook: Arc<RwLock<Orderbook>>) -> Result<()> {
     Ok(())
 }
 
-/// Check if raw bytes contain the pattern we care about
-fn is_last_trade_price(raw: &[u8]) -> bool {
-    raw.windows(LAST_TRADE_PRICE.len())
-        .any(|w| w == LAST_TRADE_PRICE)
-}
-fn is_price_change(raw: &[u8]) -> bool {
-    raw.windows(PRICE_CHANGE.len())
-        .any(|w| w == PRICE_CHANGE)
-}
-fn is_initial_book(raw: &[u8]) -> bool {
-    raw.first() == Some(&b'[') && raw.windows(ORDERBOOK.len()).any(|w| w == ORDERBOOK)
+// WE want to avoid orderbook messages (unless it's the initial book)
+fn is_book_message(raw: &[u8]) -> bool {
+    raw.first() != Some(&b'[') && raw.windows(ORDERBOOK.len()).any(|w| w == ORDERBOOK)
 }
 fn strip_array_wrapper(raw: &[u8]) -> &[u8] {
     // Skip leading '['
