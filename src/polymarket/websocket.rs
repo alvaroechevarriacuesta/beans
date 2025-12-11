@@ -14,8 +14,9 @@ use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
-const LAST_TRADE_PRICE: &[u8] = b"last_trade_price";
-const ORDERBOOK: &[u8] = b"book";
+const LAST_TRADE_PRICE: &[u8] = b"event_type\":\"last_trade_price\"";
+const PRICE_CHANGE: &[u8] = b"event_type\":\"price_change\"";
+const ORDERBOOK: &[u8] = b"event_type\":\"book\"";
 
 struct ParsedMessage {
     seq_no: u64,
@@ -93,6 +94,36 @@ pub async fn connect(orderbook: Arc<RwLock<Orderbook>>) -> Result<()> {
                             });
                         }
                     });
+                } else if is_price_change(raw) {
+                    let seq = seq_no;
+                    seq_no += 1;
+
+                    // Clone sender (cheap - just Arc clone)
+                    let tx = tx.clone();
+                    // Strip array wrapper and copy bytes
+                    let owned_data = strip_array_wrapper(raw).to_vec();
+
+                    pool.spawn(move || {
+                        if let Some(ob) = parse_message(&owned_data) {
+                            let _ = tx.send(ParsedMessage {
+                                seq_no: seq,
+                                orderbook: ob,
+                            });
+                        }
+                    });
+                } else if is_last_trade_price(raw) {
+                    let seq = seq_no;
+                    seq_no += 1;
+                    let tx = tx.clone();
+                    let owned_data = strip_array_wrapper(raw).to_vec();
+                    pool.spawn(move || {
+                        if let Some(ob) = parse_message(&owned_data) {
+                            let _ = tx.send(ParsedMessage {
+                                seq_no: seq,
+                                orderbook: ob,
+                            });
+                        }
+                    });
                 }
             }
             _ => {}
@@ -107,14 +138,13 @@ fn is_last_trade_price(raw: &[u8]) -> bool {
     raw.windows(LAST_TRADE_PRICE.len())
         .any(|w| w == LAST_TRADE_PRICE)
 }
-
-/// Check if this is the initial orderbook snapshot (starts with '[' and contains "book")
+fn is_price_change(raw: &[u8]) -> bool {
+    raw.windows(PRICE_CHANGE.len())
+        .any(|w| w == PRICE_CHANGE)
+}
 fn is_initial_book(raw: &[u8]) -> bool {
     raw.first() == Some(&b'[') && raw.windows(ORDERBOOK.len()).any(|w| w == ORDERBOOK)
 }
-
-/// Strip array wrapper: [{...}] -> {...}
-/// We already know it starts with '[' from is_initial_book
 fn strip_array_wrapper(raw: &[u8]) -> &[u8] {
     // Skip leading '['
     let start = 1;
