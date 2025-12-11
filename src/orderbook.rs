@@ -1,3 +1,4 @@
+use parking_lot::RwLock;
 use serde::Deserialize;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -5,13 +6,9 @@ use std::collections::BTreeMap;
 type PriceLevel = u64;
 type Quantity = u64;
 
-// Price precision: prices are like "0.33" -> stored as 33 (cents)
 const PRICE_DECIMALS: u32 = 2;
-// Size precision: sizes are like "4142.5" -> stored as 41425 (tenths)
 const SIZE_DECIMALS: u32 = 1;
 
-/// Intermediate struct for deserializing price/size entries from JSON
-/// Note: Polymarket sends these as strings, not numbers
 #[derive(Debug, Deserialize)]
 struct LevelEntry {
     #[serde(deserialize_with = "deserialize_price")]
@@ -20,7 +17,6 @@ struct LevelEntry {
     size: Quantity,
 }
 
-/// Raw incoming message from Polymarket WebSocket
 #[derive(Debug, Deserialize)]
 struct IncomingOrderBookMessage {
     market: String,
@@ -33,22 +29,33 @@ struct IncomingOrderBookMessage {
     hash: String,
 }
 
-/// Optimized OrderBook struct with sorted price levels
 #[derive(Debug, Default)]
 pub struct Orderbook {
     pub market: String,
     pub asset_id: String,
     pub timestamp: u64,
-    /// Asks sorted ascending by price (lowest ask first)
     pub asks: BTreeMap<PriceLevel, Quantity>,
-    /// Bids sorted descending by price (highest bid first)
     pub bids: BTreeMap<Reverse<PriceLevel>, Quantity>,
 }
 
 impl Orderbook {
-    /// Parse orderbook directly from raw WebSocket message bytes
-    /// Expects a single object `{...}` format (strip array wrapper before calling)
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+    pub fn apply_snapshot(&mut self, snapshot: Orderbook) {
+        self.market = snapshot.market;
+        self.asset_id = snapshot.asset_id;
+        self.timestamp = snapshot.timestamp;
+        self.asks = snapshot.asks;
+        self.bids = snapshot.bids;
+    }
+    pub fn update_from_bytes(&mut self, bytes: &[u8]) -> Result<(), serde_json::Error> {
+        let snapshot = Orderbook::from_bytes(bytes)?;
+        self.apply_snapshot(snapshot);
+        Ok(())
+    }
+
+    
+
+    // Helper function
+    pub fn from_bytes(bytes: &[u8]) -> Result<Orderbook, serde_json::Error> {
         let msg: IncomingOrderBookMessage = serde_json::from_slice(bytes)?;
 
         let asks: BTreeMap<PriceLevel, Quantity> = msg

@@ -827,6 +827,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "parking_lot",
  "rayon",
  "rustls",
  "rustls-pki-types",
