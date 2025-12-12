@@ -37,22 +37,23 @@ async fn main() -> Result<()> {
         "https://gamma-api.polymarket.com".to_string(),
     );
     let markets = gamma_client.list_markets(list_market_params).await?;
-    println!("Markets: {:?}", markets.len());
     for market in markets {
         println!("Market: {:?}", market.slug);
+        println!("{:?}", market.tokens);
     }
-    // // Create empty orderbook
-    // let orderbook = Arc::new(RwLock::new(Orderbook::default()));
 
-    // // Spawn polymarket websocket as background task
-    // let polymarket_handle = tokio::spawn(async move {
-    //     if let Err(e) = polymarket::websocket::connect(orderbook).await {
-    //         eprintln!("Polymarket websocket error: {}", e);
-    //     }
-    // });
+    // Create empty orderbook
+    let orderbook = Arc::new(RwLock::new(Orderbook::default()));
 
-    // // Wait for all tasks to complete
-    // let _ = polymarket_handle.await;
+    // Spawn polymarket websocket as background task
+    let polymarket_handle = tokio::spawn(async move {
+        if let Err(e) = polymarket::websocket::connect(orderbook).await {
+            eprintln!("Polymarket websocket error: {}", e);
+        }
+    });
+
+    // Wait for all tasks to complete
+    let _ = polymarket_handle.await;
 
     Ok(())
 }

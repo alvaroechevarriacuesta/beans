@@ -54,7 +54,7 @@ pub async fn connect(orderbook: Arc<RwLock<Orderbook>>) -> Result<()> {
 
     let subscribe_message = r#"{
         "type": "market",
-        "assets_ids": ["111044595014582088938260192157643537995209718659498347963726885794349502598398"]
+        "assets_ids": ["113208956813862844840489518261097673791906414884000864743041201995288298133076"]
     }"#;
 
     ws.write_frame(Frame::text(fastwebsockets::Payload::Borrowed(
@@ -93,19 +93,21 @@ pub async fn connect(orderbook: Arc<RwLock<Orderbook>>) -> Result<()> {
                         }
                     });
                 } else {
-                let owned_data = strip_array_wrapper(raw).to_vec();
+                    let owned_data = strip_array_wrapper(raw).to_vec();
 
-                pool.spawn(move || {
-                    if let Some(ob) = parse_message(&owned_data) {
-                        let _ = tx.send(ParsedMessage {
-                            seq_no: seq,
-                            orderbook: ob,
-                        });
-                    }
-                });
+                    pool.spawn(move || {
+                        if let Some(ob) = parse_message(&owned_data) {
+                            let _ = tx.send(ParsedMessage {
+                                seq_no: seq,
+                                orderbook: ob,
+                            });
+                        }
+                    });
                 }
             }
-            _ => {}
+            _ => {
+                println!("Unknown opcode: {:?}", frame.payload);
+            }
         }
     }
 
