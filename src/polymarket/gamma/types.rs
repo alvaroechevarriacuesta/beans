@@ -3,6 +3,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 #[derive(Debug, Default)]
 pub struct ListMarketParams {
     pub tag_id: Option<u64>,
+    pub order: Option<String>,
+    pub ascending: Option<bool>,
 }
 
 impl ListMarketParams {
@@ -10,6 +12,12 @@ impl ListMarketParams {
         let mut params = Vec::new();
         if let Some(tag_id) = self.tag_id {
             params.push(("tag_id", tag_id.to_string()));
+        }
+        if let Some(ref order) = self.order {
+            params.push(("order", order.clone()));
+        }
+        if let Some(ascending) = self.ascending {
+            params.push(("ascending", ascending.to_string()));
         }
         params
     }

@@ -27,7 +27,11 @@ where
 async fn main() -> Result<()> {
     let client = Arc::new(Client::new());
 
-    let list_market_params = ListMarketParams { tag_id: Some(21) };
+    let list_market_params = ListMarketParams {
+        tag_id: Some(21),
+        order: Some("createdAt".to_string()),
+        ascending: Some(false),
+    };
     let gamma_client = PolymarketGammaClient::new(
         client.clone(),
         "https://gamma-api.polymarket.com".to_string(),
