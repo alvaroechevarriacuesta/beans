@@ -1,3 +1,3 @@
-mod messages;
-mod gamma;
+pub mod gamma;
+pub mod messages;
 pub mod websocket;
